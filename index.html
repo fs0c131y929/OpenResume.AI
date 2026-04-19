@@ -404,19 +404,40 @@ Respond ONLY with valid compact JSON (no markdown, no backticks):
   }
 
   try {
-    // Calls the local proxy — swap /api/analyze for the direct Anthropic URL if running without the proxy
+    console.log('Sending request to /api/analyze...');
     const resp=await fetch('/api/analyze',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({system:sys,messages,tools:[{type:'web_search_20250305',name:'web_search'}]})
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        system:sys,
+        messages:messages,
+        tools:[{type:'web_search_20250305',name:'web_search'}]
+      })
     });
-    setStep(5);
+    
+    console.log('Response status:', resp.status);
     const data=await resp.json();
-    if(!resp.ok)throw new Error(data.error||'API error');
+    
+    if(!resp.ok){
+      throw new Error(data.error || data.details || 'API error: '+resp.status);
+    }
+    
+    setStep(5);
+    
+    // Extract text content from response
     const txt=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+    console.log('Text extracted, length:', txt.length);
+    
+    if(!txt){
+      throw new Error('No text content in response');
+    }
+    
+    // Extract JSON
     let js=txt.trim().replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
     const m=js.match(/\{[\s\S]*\}/);
-    if(!m)throw new Error('Could not parse response. Please try again.');
+    if(!m)throw new Error('Could not find JSON in response');
     const result=JSON.parse(m[0]);
+    
     setTimeout(()=>{
       document.getElementById('overlay').style.display='none';
       renderResults(result);
