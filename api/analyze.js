@@ -1,59 +1,83 @@
-/ api/analyze.js — Vercel serverless function
-// Proxies requests to the Anthropic API so your key stays server-side
-
 export default async function handler(req, res) {
-  // Only allow POST
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+  // Set CORS headers
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: 'ANTHROPIC_API_KEY environment variable is not set.' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed. Use POST.' });
+  }
+
+  const { system, messages, tools } = req.body;
+
+  if (!system || !messages || !Array.isArray(messages)) {
+    return res.status(400).json({ error: 'Missing system, messages, or tools in request body' });
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error('ANTHROPIC_API_KEY not set');
+    return res.status(500).json({ error: 'Server configuration error: missing API key' });
   }
 
   try {
-    const { system, messages, tools } = req.body;
-
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'Invalid request body: messages array required.' });
-    }
-
+    console.log('Calling Anthropic API with web search...');
+    
     const payload = {
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 5000,
-      system,
-      messages,
+      model: 'claude-opus-4-20250805',
+      max_tokens: 4096,
+      system: system,
+      messages: messages,
     };
 
-    if (tools && tools.length > 0) {
+    // Add tools if provided
+    if (tools && Array.isArray(tools) && tools.length > 0) {
       payload.tools = tools;
     }
 
-    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
-        // Enable web search beta if tools include it
-        ...(tools && tools.some(t => t.type === 'web_search_20250305')
-          ? { 'anthropic-beta': 'web-search-2025-03-05' }
-          : {}),
       },
       body: JSON.stringify(payload),
     });
 
-    const data = await anthropicRes.json();
+    console.log('API response status:', response.status);
 
-    if (!anthropicRes.ok) {
-      return res.status(anthropicRes.status).json({ error: data.error?.message || 'Anthropic API error' });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('API error response:', errorText);
+      return res.status(response.status).json({ 
+        error: `Anthropic API error: ${response.status}`,
+        details: errorText.substring(0, 500)
+      });
     }
 
+    const data = await response.json();
+    console.log('API response received, content blocks:', data.content?.length || 0);
+
+    // Return the full response including all content blocks
+    // The frontend will filter for text blocks
+    if (!data.content || data.content.length === 0) {
+      console.error('No content in API response');
+      return res.status(500).json({ error: 'No response content from Claude' });
+    }
+
+    // Return the complete API response so frontend can handle it
     return res.status(200).json(data);
 
-  } catch (err) {
-    console.error('Proxy error:', err);
-    return res.status(500).json({ error: 'Internal server error: ' + err.message });
+  } catch (error) {
+    console.error('Server error:', error);
+    return res.status(500).json({ 
+      error: error.message || 'Server error',
+      type: error.constructor.name
+    });
   }
 }
